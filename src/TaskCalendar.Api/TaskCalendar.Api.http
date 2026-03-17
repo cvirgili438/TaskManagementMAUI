@@ -1,0 +1,6 @@
+@TaskCalendar.Api_HostAddress = http://localhost:5136
+
+GET {{TaskCalendar.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
