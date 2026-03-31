@@ -1,0 +1,20 @@
+@inject SessionService Session
+@inject AppLocalizer T
+
+<div class="brand-block">
+    <span class="eyebrow">Multi-user MAUI + Blazor</span>
+    <a class="brand-link" href="">@T["app_name"]</a>
+</div>
+
+<nav class="nav-stack">
+    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">@T["app_name"]</NavLink>
+    @if (!Session.IsAuthenticated)
+    {
+        <NavLink class="nav-link" href="login">@T["login"]</NavLink>
+    }
+    else
+    {
+        <NavLink class="nav-link" href="calendar">@T["calendar"]</NavLink>
+        <NavLink class="nav-link" href="settings">@T["settings"]</NavLink>
+    }
+</nav>

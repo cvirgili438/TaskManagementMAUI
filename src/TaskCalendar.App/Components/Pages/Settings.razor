@@ -1,0 +1,277 @@
+@page "/settings"
+@inject SessionService Session
+@inject AppLocalizer T
+@inject CalendarApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>@T["settings"]</PageTitle>
+
+@if (!isReady)
+{
+    <p>Loading...</p>
+}
+else if (!Session.IsAuthenticated)
+{
+    <p>@T["login"] required.</p>
+}
+else
+{
+    <section class="panel-card">
+        <div class="section-heading">
+            <div>
+                <span class="eyebrow">@T["settings"]</span>
+                <h1>@T["operating_hours"]</h1>
+                <p class="settings-copy">@GetHelpText()</p>
+            </div>
+
+            <div class="inline-actions">
+                <select @bind="language" @bind:after="OnLanguageChangedAsync">
+                    <option value="es">Espanol</option>
+                    <option value="en">English</option>
+                </select>
+                <button class="primary-button" @onclick="SaveAsync">@T["save"]</button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <div class="error-banner">@errorMessage</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(successMessage))
+        {
+            <div class="success-banner">@successMessage</div>
+        }
+
+        <div class="hours-grid">
+            @foreach (var day in days.OrderBy(x => x.SortOrder))
+            {
+                <article class="hour-card @(day.IsEnabled ? string.Empty : "hour-card-disabled")">
+                    <div class="hour-header">
+                        <div>
+                            <strong>@day.Label</strong>
+                            <p class="day-caption">@day.Caption</p>
+                        </div>
+                        <label class="toggle-row">
+                            <input type="checkbox" @bind="day.IsEnabled" />
+                            <span>@T["enabled"]</span>
+                        </label>
+                    </div>
+
+                    <div class="time-range">
+                        <label>
+                            <span>@T["start"]</span>
+                            <input type="time"
+                                   value="@day.Start"
+                                   disabled="@(!day.IsEnabled)"
+                                   @onchange="args => day.Start = args.Value?.ToString() ?? string.Empty" />
+                        </label>
+                        <label>
+                            <span>@T["end"]</span>
+                            <input type="time"
+                                   value="@day.End"
+                                   disabled="@(!day.IsEnabled)"
+                                   @onchange="args => day.End = args.Value?.ToString() ?? string.Empty" />
+                        </label>
+                    </div>
+                </article>
+            }
+        </div>
+    </section>
+}
+
+@code {
+    private readonly List<OperatingHourEditor> days = [];
+    private bool isReady;
+    private string? errorMessage;
+    private string? successMessage;
+    private string language = "es";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.InitializeAsync();
+        isReady = true;
+        language = Session.Language;
+
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        BuildDefaultDays();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            errorMessage = null;
+            successMessage = null;
+
+            var response = await ApiClient.GetOperatingHoursAsync();
+            if (response.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var apiDay in response)
+            {
+                var localDay = days.FirstOrDefault(x => x.DayOfWeek == apiDay.DayOfWeek);
+                if (localDay is null)
+                {
+                    continue;
+                }
+
+                localDay.IsEnabled = apiDay.IsEnabled;
+                localDay.Start = apiDay.StartTime.ToString("HH\\:mm");
+                localDay.End = apiDay.EndTime.ToString("HH\\:mm");
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        try
+        {
+            errorMessage = null;
+            successMessage = null;
+
+            await ApiClient.SaveOperatingHoursAsync(new()
+            {
+                Days = days.Select(x => new UserOperatingHourDto
+                {
+                    DayOfWeek = x.DayOfWeek,
+                    IsEnabled = x.IsEnabled,
+                    StartTime = TimeOnly.Parse(x.Start),
+                    EndTime = TimeOnly.Parse(x.End)
+                }).ToList()
+            });
+
+            successMessage = language == "en"
+                ? "Operating hours saved."
+                : "Horario operativo guardado.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private Task OnLanguageChangedAsync()
+    {
+        Session.SetLanguage(language);
+        BuildDefaultDays(preserveValues: true);
+        successMessage = null;
+        return Task.CompletedTask;
+    }
+
+    private void BuildDefaultDays(bool preserveValues = false)
+    {
+        var existing = preserveValues
+            ? days.ToDictionary(x => x.DayOfWeek)
+            : new Dictionary<DayOfWeek, OperatingHourEditor>();
+
+        days.Clear();
+
+        foreach (var dayOfWeek in OrderedDays())
+        {
+            if (existing.TryGetValue(dayOfWeek, out var previous))
+            {
+                previous.Label = GetDayLabel(dayOfWeek);
+                previous.Caption = GetDayCaption(dayOfWeek);
+                previous.SortOrder = GetSortOrder(dayOfWeek);
+                days.Add(previous);
+                continue;
+            }
+
+            days.Add(new OperatingHourEditor
+            {
+                DayOfWeek = dayOfWeek,
+                IsEnabled = dayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday,
+                Start = "08:00",
+                End = "18:00",
+                Label = GetDayLabel(dayOfWeek),
+                Caption = GetDayCaption(dayOfWeek),
+                SortOrder = GetSortOrder(dayOfWeek)
+            });
+        }
+    }
+
+    private string GetHelpText()
+    {
+        return language == "en"
+            ? "Define when each user is available so tasks can be scheduled inside valid time windows."
+            : "Defini cuando cada usuario esta disponible para asignar tareas dentro de franjas validas.";
+    }
+
+    private string GetDayLabel(DayOfWeek dayOfWeek)
+    {
+        return (language, dayOfWeek) switch
+        {
+            ("en", DayOfWeek.Monday) => "Monday",
+            ("en", DayOfWeek.Tuesday) => "Tuesday",
+            ("en", DayOfWeek.Wednesday) => "Wednesday",
+            ("en", DayOfWeek.Thursday) => "Thursday",
+            ("en", DayOfWeek.Friday) => "Friday",
+            ("en", DayOfWeek.Saturday) => "Saturday",
+            ("en", DayOfWeek.Sunday) => "Sunday",
+            (_, DayOfWeek.Monday) => "Lunes",
+            (_, DayOfWeek.Tuesday) => "Martes",
+            (_, DayOfWeek.Wednesday) => "Miercoles",
+            (_, DayOfWeek.Thursday) => "Jueves",
+            (_, DayOfWeek.Friday) => "Viernes",
+            (_, DayOfWeek.Saturday) => "Sabado",
+            _ => "Domingo"
+        };
+    }
+
+    private string GetDayCaption(DayOfWeek dayOfWeek)
+    {
+        var weekend = dayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+        return language == "en"
+            ? (weekend ? "Default non-working day" : "Default working day")
+            : (weekend ? "Dia no laborable por defecto" : "Dia laborable por defecto");
+    }
+
+    private static IEnumerable<DayOfWeek> OrderedDays()
+    {
+        yield return DayOfWeek.Monday;
+        yield return DayOfWeek.Tuesday;
+        yield return DayOfWeek.Wednesday;
+        yield return DayOfWeek.Thursday;
+        yield return DayOfWeek.Friday;
+        yield return DayOfWeek.Saturday;
+        yield return DayOfWeek.Sunday;
+    }
+
+    private static int GetSortOrder(DayOfWeek dayOfWeek)
+    {
+        return dayOfWeek switch
+        {
+            DayOfWeek.Monday => 1,
+            DayOfWeek.Tuesday => 2,
+            DayOfWeek.Wednesday => 3,
+            DayOfWeek.Thursday => 4,
+            DayOfWeek.Friday => 5,
+            DayOfWeek.Saturday => 6,
+            _ => 7
+        };
+    }
+
+    private sealed class OperatingHourEditor
+    {
+        public DayOfWeek DayOfWeek { get; set; }
+        public bool IsEnabled { get; set; }
+        public string Start { get; set; } = "08:00";
+        public string End { get; set; } = "18:00";
+        public string Label { get; set; } = string.Empty;
+        public string Caption { get; set; } = string.Empty;
+        public int SortOrder { get; set; }
+    }
+}

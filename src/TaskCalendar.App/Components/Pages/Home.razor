@@ -1,0 +1,24 @@
+@page "/"
+@inject SessionService Session
+@inject AppLocalizer T
+@inject NavigationManager Navigation
+
+<PageTitle>@T["app_name"]</PageTitle>
+
+<section class="hero-card">
+    <span class="eyebrow">MAUI Blazor Hybrid</span>
+    <h1>@T["app_name"]</h1>
+    <p>@T["welcome"]</p>
+    <p>@T["seed_hint"]</p>
+
+    <div class="inline-actions">
+        @if (Session.IsAuthenticated)
+        {
+            <button class="primary-button" @onclick='() => Navigation.NavigateTo("/calendar")'>@T["go_calendar"]</button>
+        }
+        else
+        {
+            <button class="primary-button" @onclick='() => Navigation.NavigateTo("/login")'>@T["login"]</button>
+        }
+    </div>
+</section>

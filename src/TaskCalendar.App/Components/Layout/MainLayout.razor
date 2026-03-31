@@ -1,0 +1,75 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject SessionService Session
+@inject AppLocalizer T
+@inject NavigationManager Navigation
+
+<div class="page-shell">
+    <aside class="sidebar-shell">
+        <NavMenu />
+    </aside>
+
+    <main class="content-shell @(isLanguageTransitioning ? "language-swap" : string.Empty)">
+        <header class="topbar">
+            <div>
+                <strong>@T["app_name"]</strong>
+                @if (Session.CurrentUser is not null)
+                {
+                    <span class="muted-text">@T["authenticated_as"] @Session.CurrentUser.DisplayName</span>
+                }
+            </div>
+            <div class="inline-actions">
+                <button @onclick="ToggleLanguage">@T["language"]: @(Session.Language == "en" ? "English" : "Espanol")</button>
+                @if (Session.IsAuthenticated)
+                {
+                    <button class="danger-button" @onclick="LogoutAsync">@T["logout"]</button>
+                }
+            </div>
+        </header>
+
+        <article class="content-frame" @key="Session.LanguageVersion">
+            @Body
+        </article>
+    </main>
+</div>
+
+@code {
+    private bool isLanguageTransitioning;
+    private int animationVersion;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.Changed += OnChanged;
+        await Session.InitializeAsync();
+    }
+
+    private async void OnChanged()
+    {
+        var currentVersion = ++animationVersion;
+        isLanguageTransitioning = true;
+        await InvokeAsync(StateHasChanged);
+        await Task.Delay(160);
+        if (currentVersion != animationVersion)
+        {
+            return;
+        }
+        isLanguageTransitioning = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleLanguage()
+    {
+        Session.SetLanguage(Session.Language == "en" ? "es" : "en");
+    }
+
+    private async Task LogoutAsync()
+    {
+        await Session.LogoutAsync();
+        Navigation.NavigateTo("/login");
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnChanged;
+    }
+}

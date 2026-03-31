@@ -1,0 +1,633 @@
+@page "/calendar"
+@implements IDisposable
+@using TaskCalendar.App.Models
+@using TaskCalendar.Application.DTOs.Calendar
+@using TaskCalendar.Domain.Enums
+@inject SessionService Session
+@inject AppLocalizer T
+@inject CalendarApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>@T["calendar"]</PageTitle>
+
+@if (!isReady)
+{
+    <p>Loading...</p>
+}
+else if (!Session.IsAuthenticated)
+{
+    <p>@T["login"] required.</p>
+}
+else
+{
+    <div class="toolbar-card">
+        <div>
+            <span class="eyebrow">@T["calendar"]</span>
+            <h1>@GetCalendarTitle()</h1>
+            <p>@T["view_range"]: @rangeStart.ToString("g") - @rangeEnd.ToString("g")</p>
+        </div>
+
+        <div class="toolbar-actions">
+            <div class="segmented">
+                <button class="@(viewMode == CalendarViewMode.Day ? "active" : string.Empty)" @onclick="() => ChangeViewAsync(CalendarViewMode.Day)">@T["daily"]</button>
+                <button class="@(viewMode == CalendarViewMode.Week ? "active" : string.Empty)" @onclick="() => ChangeViewAsync(CalendarViewMode.Week)">@T["weekly"]</button>
+                <button class="@(viewMode == CalendarViewMode.Month ? "active" : string.Empty)" @onclick="() => ChangeViewAsync(CalendarViewMode.Month)">@T["monthly"]</button>
+            </div>
+            <div class="inline-actions">
+                <button @onclick="MovePreviousAsync">&lt;</button>
+                <button @onclick="GoTodayAsync">@T["today"]</button>
+                <button @onclick="MoveNextAsync">&gt;</button>
+                <button @onclick="LoadAsync">@T["refresh"]</button>
+            </div>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(errorMessage))
+    {
+        <div class="error-banner">@errorMessage</div>
+    }
+
+    <section class="panel-card calendar-surface">
+        <div class="section-heading">
+            <div>
+                <h2>@GetViewHeading()</h2>
+                <p class="settings-copy">@GetViewDescription()</p>
+            </div>
+        </div>
+
+        @if (occurrences.Count == 0)
+        {
+            <p>@T["no_data"]</p>
+        }
+        else if (viewMode == CalendarViewMode.Day)
+        {
+            <div class="day-timeline">
+                @foreach (var slot in GetDaySlots())
+                {
+                    <div class="timeline-row">
+                        <div class="timeline-hour">@slot.Label</div>
+                        <div class="timeline-events">
+                            @if (slot.Items.Count == 0)
+                            {
+                                <div class="timeline-empty">@GetEmptySlotText()</div>
+                            }
+                            else
+                            {
+                                @foreach (var item in slot.Items)
+                                {
+                                    <button class="calendar-entry"
+                                            type="button"
+                                            @onclick="() => EditFromOccurrence(item)">
+                                        <strong>@item.Title</strong>
+                                        <span>@item.StartAt.LocalDateTime.ToString("HH:mm") - @item.EndAt.LocalDateTime.ToString("HH:mm")</span>
+                                        <small>@item.Priority | @item.Status</small>
+                                    </button>
+                                }
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (viewMode == CalendarViewMode.Week)
+        {
+            <div class="week-grid">
+                @foreach (var day in GetWeekDays())
+                {
+                    var items = GetOccurrencesForDate(day);
+                    <section class="week-column @(day.Date == selectedDate.Date ? "week-column-selected" : string.Empty)">
+                        <header class="week-column-header">
+                            <button type="button" class="day-select-button" @onclick="() => SelectDateAsync(day)">
+                                <strong>@GetShortDayLabel(day.DayOfWeek)</strong>
+                                <span>@day.ToString("dd/MM")</span>
+                            </button>
+                        </header>
+                        <div class="week-column-body">
+                            @if (items.Count == 0)
+                            {
+                                <div class="timeline-empty">@GetEmptySlotText()</div>
+                            }
+                            else
+                            {
+                                @foreach (var item in items)
+                                {
+                                    <button class="calendar-entry"
+                                            type="button"
+                                            @onclick="() => EditFromOccurrence(item)">
+                                        <strong>@item.Title</strong>
+                                        <span>@item.StartAt.LocalDateTime.ToString("HH:mm") - @item.EndAt.LocalDateTime.ToString("HH:mm")</span>
+                                        <small>@item.Priority | @item.Status</small>
+                                    </button>
+                                }
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="month-grid">
+                @foreach (var day in GetMonthCells())
+                {
+                    var items = GetOccurrencesForDate(day);
+                    <section class="month-cell @(day.Month == selectedDate.Month ? string.Empty : "month-cell-muted") @(day.Date == DateTime.Today ? "month-cell-today" : string.Empty)">
+                        <header class="month-cell-header">
+                            <button type="button" class="day-select-button" @onclick="() => SelectDateAsync(day)">
+                                <strong>@day.Day</strong>
+                                <span>@GetShortDayLabel(day.DayOfWeek)</span>
+                            </button>
+                        </header>
+                        <div class="month-cell-body">
+                            @if (items.Count == 0)
+                            {
+                                <div class="timeline-empty">@GetEmptySlotText()</div>
+                            }
+                            else
+                            {
+                                @foreach (var item in items.Take(3))
+                                {
+                                    <button class="calendar-entry compact-entry"
+                                            type="button"
+                                            @onclick="() => EditFromOccurrence(item)">
+                                        <strong>@item.StartAt.LocalDateTime.ToString("HH:mm")</strong>
+                                        <span>@item.Title</span>
+                                    </button>
+                                }
+
+                                @if (items.Count > 3)
+                                {
+                                    <div class="more-items-label">+@(items.Count - 3) @GetMoreItemsText()</div>
+                                }
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+        }
+    </section>
+
+    <div class="dashboard-grid">
+        <section class="panel-card">
+            <div class="section-heading">
+                <h2>@(editingTaskId is null ? T["new_task"] : T["edit_task"])</h2>
+            </div>
+
+            <EditForm Model="@editor" OnValidSubmit="@SaveTaskAsync">
+                <div class="form-grid">
+                    <label>
+                        <span>@T["title"]</span>
+                        <InputText @bind-Value="editor.Title" />
+                    </label>
+                    <label>
+                        <span>@T["description"]</span>
+                        <InputTextArea @bind-Value="editor.Description" />
+                    </label>
+                    <label>
+                        <span>@T["priority"]</span>
+                        <select @bind="editor.Priority">
+                            @foreach (var priority in Enum.GetValues<TaskPriority>())
+                            {
+                                <option value="@priority">@priority</option>
+                            }
+                        </select>
+                    </label>
+                    <label>
+                        <span>@T["status"]</span>
+                        <select @bind="editor.Status">
+                            @foreach (var status in Enum.GetValues<TaskCalendar.Domain.Enums.TaskStatus>())
+                            {
+                                <option value="@status">@status</option>
+                            }
+                        </select>
+                    </label>
+                    <label>
+                        <span>@T["start"]</span>
+                        <input type="datetime-local" value="@editor.StartAt" @onchange="OnStartAtChanged" />
+                    </label>
+                    <label>
+                        <span>@T["end"]</span>
+                        <input type="datetime-local" value="@editor.EndAt" @onchange="OnEndAtChanged" />
+                    </label>
+                    <label>
+                        <span>@T["repeat"]</span>
+                        <select @bind="editor.RecurrenceType">
+                            @foreach (var recurrence in Enum.GetValues<RecurrenceType>())
+                            {
+                                <option value="@recurrence">@recurrence</option>
+                            }
+                        </select>
+                    </label>
+                    <label>
+                        <span>Interval</span>
+                        <InputNumber @bind-Value="editor.RecurrenceInterval" />
+                    </label>
+                    <label>
+                        <span>@T["repeat_until"]</span>
+                        <input type="datetime-local" value="@editor.RecurrenceEndAt" @onchange="OnRecurrenceEndAtChanged" />
+                    </label>
+                </div>
+
+                <div class="inline-actions">
+                    <button class="primary-button" type="submit">@T["save"]</button>
+                    <button type="button" @onclick="ResetEditor">Reset</button>
+                </div>
+            </EditForm>
+        </section>
+
+        <section class="panel-card">
+            <div class="section-heading">
+                <h2>@T["definitions"]</h2>
+            </div>
+
+            @if (definitions.Count == 0)
+            {
+                <p>@T["no_data"]</p>
+            }
+            else
+            {
+                <div class="stack-list">
+                    @foreach (var item in definitions)
+                    {
+                        <article class="task-card">
+                            <div>
+                                <strong>@item.Title</strong>
+                                <p>@item.Description</p>
+                                <small>@item.Priority | @item.Status | @item.StartAt.LocalDateTime.ToString("g")</small>
+                            </div>
+                            <div class="inline-actions">
+                                <button @onclick="() => StartEdit(item)">@T["edit"]</button>
+                                <button class="danger-button" @onclick="() => DeleteTaskAsync(item.Id)">@T["delete"]</button>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private readonly TaskEditorModel editor = new();
+    private readonly List<TaskItemResponse> definitions = [];
+    private readonly List<TaskOccurrenceResponse> occurrences = [];
+    private bool isReady;
+    private string? errorMessage;
+    private Guid? editingTaskId;
+    private CalendarViewMode viewMode = CalendarViewMode.Week;
+    private DateTime selectedDate = DateTime.Today;
+    private DateTimeOffset rangeStart;
+    private DateTimeOffset rangeEnd;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.InitializeAsync();
+        Session.Changed += OnSessionChanged;
+        isReady = true;
+
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login");
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            errorMessage = null;
+            ComputeRange();
+            definitions.Clear();
+            occurrences.Clear();
+            definitions.AddRange(await ApiClient.GetTaskDefinitionsAsync());
+            occurrences.AddRange(await ApiClient.GetOccurrencesAsync(rangeStart, rangeEnd));
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private void ComputeRange()
+    {
+        rangeStart = viewMode switch
+        {
+            CalendarViewMode.Day => new DateTimeOffset(selectedDate.Date),
+            CalendarViewMode.Week => new DateTimeOffset(selectedDate.Date.AddDays(-(int)selectedDate.DayOfWeek)),
+            CalendarViewMode.Month => new DateTimeOffset(new DateTime(selectedDate.Year, selectedDate.Month, 1)),
+            _ => new DateTimeOffset(selectedDate.Date)
+        };
+
+        rangeEnd = viewMode switch
+        {
+            CalendarViewMode.Day => rangeStart.AddDays(1).AddMinutes(-1),
+            CalendarViewMode.Week => rangeStart.AddDays(7).AddMinutes(-1),
+            CalendarViewMode.Month => rangeStart.AddMonths(1).AddMinutes(-1),
+            _ => rangeStart.AddDays(1).AddMinutes(-1)
+        };
+    }
+
+    private async Task ChangeViewAsync(CalendarViewMode mode)
+    {
+        viewMode = mode;
+        await LoadAsync();
+    }
+
+    private async Task MovePreviousAsync()
+    {
+        selectedDate = viewMode switch
+        {
+            CalendarViewMode.Day => selectedDate.AddDays(-1),
+            CalendarViewMode.Week => selectedDate.AddDays(-7),
+            CalendarViewMode.Month => selectedDate.AddMonths(-1),
+            _ => selectedDate
+        };
+
+        await LoadAsync();
+    }
+
+    private async Task MoveNextAsync()
+    {
+        selectedDate = viewMode switch
+        {
+            CalendarViewMode.Day => selectedDate.AddDays(1),
+            CalendarViewMode.Week => selectedDate.AddDays(7),
+            CalendarViewMode.Month => selectedDate.AddMonths(1),
+            _ => selectedDate
+        };
+
+        await LoadAsync();
+    }
+
+    private async Task GoTodayAsync()
+    {
+        selectedDate = DateTime.Today;
+        await LoadAsync();
+    }
+
+    private async Task SelectDateAsync(DateTime date)
+    {
+        selectedDate = date;
+        if (viewMode == CalendarViewMode.Month)
+        {
+            await ChangeViewAsync(CalendarViewMode.Day);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task SaveTaskAsync()
+    {
+        try
+        {
+            errorMessage = null;
+            var request = editor.ToRequest();
+            if (editingTaskId is null)
+            {
+                await ApiClient.CreateTaskAsync(request);
+            }
+            else
+            {
+                await ApiClient.UpdateTaskAsync(editingTaskId.Value, request);
+            }
+
+            ResetEditor();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private void StartEdit(TaskItemResponse item)
+    {
+        editingTaskId = item.Id;
+        editor.Load(item);
+    }
+
+    private void EditFromOccurrence(TaskOccurrenceResponse item)
+    {
+        var definition = definitions.FirstOrDefault(x => x.Id == item.TaskId);
+        if (definition is not null)
+        {
+            StartEdit(definition);
+        }
+    }
+
+    private async Task DeleteTaskAsync(Guid id)
+    {
+        try
+        {
+            errorMessage = null;
+            await ApiClient.DeleteTaskAsync(id);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private void ResetEditor()
+    {
+        editingTaskId = null;
+        editor.Reset();
+    }
+
+    private void OnStartAtChanged(ChangeEventArgs args)
+    {
+        editor.StartAt = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnEndAtChanged(ChangeEventArgs args)
+    {
+        editor.EndAt = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnRecurrenceEndAtChanged(ChangeEventArgs args)
+    {
+        editor.RecurrenceEndAt = args.Value?.ToString();
+    }
+
+    private string GetCalendarTitle()
+    {
+        return viewMode switch
+        {
+            CalendarViewMode.Day => selectedDate.ToString("dddd, dd MMMM yyyy"),
+            CalendarViewMode.Week => $"{rangeStart:dd MMM} - {rangeEnd:dd MMM yyyy}",
+            CalendarViewMode.Month => selectedDate.ToString("MMMM yyyy"),
+            _ => selectedDate.ToString("d")
+        };
+    }
+
+    private string GetViewHeading()
+    {
+        return viewMode switch
+        {
+            CalendarViewMode.Day => Session.Language == "en" ? "Day view" : "Vista diaria",
+            CalendarViewMode.Week => Session.Language == "en" ? "Week view" : "Vista semanal",
+            CalendarViewMode.Month => Session.Language == "en" ? "Month view" : "Vista mensual",
+            _ => T["calendar"]
+        };
+    }
+
+    private string GetViewDescription()
+    {
+        return viewMode switch
+        {
+            CalendarViewMode.Day => Session.Language == "en"
+                ? "The selected day shows each hour with the tasks assigned to that time slot."
+                : "El dia seleccionado muestra cada hora con las tareas asignadas a esa franja.",
+            CalendarViewMode.Week => Session.Language == "en"
+                ? "The selected week is displayed from Sunday to Saturday with all scheduled tasks."
+                : "La semana seleccionada se muestra de domingo a sabado con todas las tareas agendadas.",
+            CalendarViewMode.Month => Session.Language == "en"
+                ? "The full month is displayed in a calendar grid with the tasks for each date."
+                : "El mes completo se muestra en una grilla con las tareas de cada fecha.",
+            _ => string.Empty
+        };
+    }
+
+    private string GetEmptySlotText() => Session.Language == "en" ? "No tasks" : "Sin tareas";
+
+    private string GetMoreItemsText() => Session.Language == "en" ? "more" : "mas";
+
+    private string GetShortDayLabel(DayOfWeek dayOfWeek)
+    {
+        return (Session.Language, dayOfWeek) switch
+        {
+            ("en", DayOfWeek.Sunday) => "Sun",
+            ("en", DayOfWeek.Monday) => "Mon",
+            ("en", DayOfWeek.Tuesday) => "Tue",
+            ("en", DayOfWeek.Wednesday) => "Wed",
+            ("en", DayOfWeek.Thursday) => "Thu",
+            ("en", DayOfWeek.Friday) => "Fri",
+            ("en", DayOfWeek.Saturday) => "Sat",
+            (_, DayOfWeek.Sunday) => "Dom",
+            (_, DayOfWeek.Monday) => "Lun",
+            (_, DayOfWeek.Tuesday) => "Mar",
+            (_, DayOfWeek.Wednesday) => "Mie",
+            (_, DayOfWeek.Thursday) => "Jue",
+            (_, DayOfWeek.Friday) => "Vie",
+            _ => "Sab"
+        };
+    }
+
+    private List<TaskOccurrenceResponse> GetOccurrencesForDate(DateTime date)
+    {
+        return occurrences
+            .Where(x => x.StartAt.LocalDateTime.Date == date.Date)
+            .OrderBy(x => x.StartAt)
+            .ToList();
+    }
+
+    private IEnumerable<DaySlot> GetDaySlots()
+    {
+        var dayItems = GetOccurrencesForDate(selectedDate);
+        for (var hour = 0; hour < 24; hour++)
+        {
+            var hourStart = selectedDate.Date.AddHours(hour);
+            var hourEnd = hourStart.AddHours(1);
+            yield return new DaySlot
+            {
+                Label = $"{hour:00}:00",
+                Items = dayItems
+                    .Where(x => x.StartAt.LocalDateTime < hourEnd && x.EndAt.LocalDateTime > hourStart)
+                    .ToList()
+            };
+        }
+    }
+
+    private IEnumerable<DateTime> GetWeekDays()
+    {
+        var start = rangeStart.LocalDateTime.Date;
+        for (var offset = 0; offset < 7; offset++)
+        {
+            yield return start.AddDays(offset);
+        }
+    }
+
+    private IEnumerable<DateTime> GetMonthCells()
+    {
+        var firstOfMonth = new DateTime(selectedDate.Year, selectedDate.Month, 1);
+        var start = firstOfMonth.AddDays(-(int)firstOfMonth.DayOfWeek);
+        for (var offset = 0; offset < 42; offset++)
+        {
+            yield return start.AddDays(offset);
+        }
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnSessionChanged;
+    }
+
+    private sealed class DaySlot
+    {
+        public string Label { get; init; } = string.Empty;
+        public List<TaskOccurrenceResponse> Items { get; init; } = [];
+    }
+
+    private sealed class TaskEditorModel
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public TaskPriority Priority { get; set; } = TaskPriority.Medium;
+        public TaskCalendar.Domain.Enums.TaskStatus Status { get; set; } = TaskCalendar.Domain.Enums.TaskStatus.Pending;
+        public string StartAt { get; set; } = DateTime.Now.AddHours(1).ToString("yyyy-MM-ddTHH:mm");
+        public string EndAt { get; set; } = DateTime.Now.AddHours(2).ToString("yyyy-MM-ddTHH:mm");
+        public RecurrenceType RecurrenceType { get; set; }
+        public int RecurrenceInterval { get; set; } = 1;
+        public string? RecurrenceEndAt { get; set; }
+
+        public TaskItemRequest ToRequest()
+        {
+            return new TaskItemRequest
+            {
+                Title = Title,
+                Description = Description,
+                Priority = Priority,
+                Status = Status,
+                StartAt = DateTimeOffset.Parse(StartAt),
+                EndAt = DateTimeOffset.Parse(EndAt),
+                RecurrenceType = RecurrenceType,
+                RecurrenceInterval = RecurrenceInterval,
+                RecurrenceEndAt = string.IsNullOrWhiteSpace(RecurrenceEndAt) ? null : DateTimeOffset.Parse(RecurrenceEndAt)
+            };
+        }
+
+        public void Load(TaskItemResponse item)
+        {
+            Title = item.Title;
+            Description = item.Description;
+            Priority = item.Priority;
+            Status = item.Status;
+            StartAt = item.StartAt.LocalDateTime.ToString("yyyy-MM-ddTHH:mm");
+            EndAt = item.EndAt.LocalDateTime.ToString("yyyy-MM-ddTHH:mm");
+            RecurrenceType = item.RecurrenceType;
+            RecurrenceInterval = item.RecurrenceInterval;
+            RecurrenceEndAt = item.RecurrenceEndAt?.LocalDateTime.ToString("yyyy-MM-ddTHH:mm");
+        }
+
+        public void Reset()
+        {
+            Title = string.Empty;
+            Description = string.Empty;
+            Priority = TaskPriority.Medium;
+            Status = TaskCalendar.Domain.Enums.TaskStatus.Pending;
+            StartAt = DateTime.Now.AddHours(1).ToString("yyyy-MM-ddTHH:mm");
+            EndAt = DateTime.Now.AddHours(2).ToString("yyyy-MM-ddTHH:mm");
+            RecurrenceType = RecurrenceType.None;
+            RecurrenceInterval = 1;
+            RecurrenceEndAt = null;
+        }
+    }
+}

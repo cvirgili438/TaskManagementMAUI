@@ -1,0 +1,117 @@
+@page "/login"
+@inject SessionService Session
+@inject AppLocalizer T
+@inject NavigationManager Navigation
+
+<PageTitle>@T["login"]</PageTitle>
+
+<div class="auth-shell">
+    <section class="hero-card">
+        <span class="eyebrow">@T["app_name"]</span>
+        <h1>@T["welcome"]</h1>
+        <p>@T["seed_hint"]</p>
+    </section>
+
+    <section class="panel-card">
+        <div class="segmented">
+            <button class="@(isRegister ? string.Empty : "active")" @onclick="() => isRegister = false">@T["login"]</button>
+            <button class="@(isRegister ? "active" : string.Empty)" @onclick="() => isRegister = true">@T["register"]</button>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <div class="error-banner">@errorMessage</div>
+        }
+
+        <EditForm Model="@form" OnValidSubmit="@SubmitAsync">
+            <div class="form-grid">
+                @if (isRegister)
+                {
+                    <label>
+                        <span>@T["display_name"]</span>
+                        <InputText @bind-Value="form.DisplayName" />
+                    </label>
+                }
+
+                <label>
+                    <span>@T["email"]</span>
+                    <InputText @bind-Value="form.Email" />
+                </label>
+
+                <label>
+                    <span>@T["password"]</span>
+                    <InputText type="password" @bind-Value="form.Password" />
+                </label>
+
+                @if (isRegister)
+                {
+                    <label>
+                        <span>@T["language"]</span>
+                        <select @bind="form.PreferredCulture">
+                            <option value="es-AR">Español</option>
+                            <option value="en-US">English</option>
+                        </select>
+                    </label>
+                }
+            </div>
+
+            <button class="primary-button" type="submit">@(isRegister ? T["register"] : T["login"])</button>
+        </EditForm>
+    </section>
+</div>
+
+@code {
+    private bool isRegister;
+    private AuthFormModel form = new();
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Session.InitializeAsync();
+        if (Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/calendar");
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        errorMessage = null;
+
+        try
+        {
+            if (isRegister)
+            {
+                await Session.RegisterAsync(new()
+                {
+                    DisplayName = form.DisplayName,
+                    Email = form.Email,
+                    Password = form.Password,
+                    PreferredCulture = form.PreferredCulture
+                });
+            }
+            else
+            {
+                await Session.LoginAsync(new()
+                {
+                    Email = form.Email,
+                    Password = form.Password
+                });
+            }
+
+            Navigation.NavigateTo("/calendar");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+        }
+    }
+
+    private sealed class AuthFormModel
+    {
+        public string DisplayName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        public string PreferredCulture { get; set; } = "es-AR";
+    }
+}
